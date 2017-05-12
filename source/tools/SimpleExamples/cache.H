@@ -385,9 +385,9 @@ class CACHE : public CACHE_BASE
 
     // modifiers
     /// Cache access from addr to addr+size-1
-    bool Access(ADDRINT addr, UINT32 size, ACCESS_TYPE accessType);
+    bool Access(ADDRINT addr, UINT32 size, ACCESS_TYPE accessType, BOOL doTrace);
     /// Cache access at addr that does not span cache lines
-    bool AccessSingleLine(ADDRINT addr, ACCESS_TYPE accessType);
+    bool AccessSingleLine(ADDRINT addr, ACCESS_TYPE accessType, BOOL doTrace);
 };
 
 /*!
@@ -395,7 +395,8 @@ class CACHE : public CACHE_BASE
  */
 
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
-bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, ACCESS_TYPE accessType)
+bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr,
+        UINT32 size, ACCESS_TYPE accessType, BOOL doTrace)
 {
     const ADDRINT highAddr = addr + size;
     bool allHit = true;
@@ -424,7 +425,9 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, ACC
     }
     while (addr < highAddr);
 
-    _access[accessType][allHit]++;
+    if (doTrace) {
+        _access[accessType][allHit]++;
+    }
 
     return allHit;
 }
@@ -433,7 +436,8 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr, UINT32 size, ACC
  *  @return true if accessed cache line hits
  */
 template <class SET, UINT32 MAX_SETS, UINT32 STORE_ALLOCATION>
-bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCESS_TYPE accessType)
+bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr,
+        ACCESS_TYPE accessType, BOOL doTrace)
 {
     CACHE_TAG tag;
     UINT32 setIndex;
@@ -450,7 +454,10 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr, ACCESS
         set.Replace(tag);
     }
 
-    _access[accessType][hit]++;
+    // Only update stats when tracking.
+    if (doTrace) {
+        _access[accessType][hit]++;
+    }
 
     return hit;
 }

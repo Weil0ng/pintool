@@ -56,7 +56,7 @@ ICOUNT icount;
 
 CONTROL_MANAGER control("controller_");
 
-BOOL do_trace;
+BOOL doTrace;
 
 /* ===================================================================== */
 /* Commandline Switches */
@@ -78,12 +78,14 @@ KNOB<UINT32> KnobIL1CacheSize(KNOB_MODE_WRITEONCE, "pintool",
     "il1-size","64", "icache size in kilobytes");
 KNOB<UINT32> KnobDL1CacheSize(KNOB_MODE_WRITEONCE, "pintool",
     "dl1-size","64", "dcache size in kilobytes");
-KNOB<UINT32> KnobDL2CacheSize(KNOB_MODE_WRITEONCE, "pintool",
-    "dl2-size","64", "dcache size in kilobytes");
 KNOB<UINT32> KnobLineSize(KNOB_MODE_WRITEONCE, "pintool",
     "line-size","64", "cache block size in bytes");
 KNOB<UINT32> KnobAssociativity(KNOB_MODE_WRITEONCE, "pintool",
     "a","4", "cache associativity (1 for direct mapped)");
+KNOB<BOOL>   KnobDL2Cache(KNOB_MODE_WRITEONCE,   "pintool",
+   "dl2", "0", "use 2 level dcache");
+KNOB<UINT32> KnobDL2CacheSize(KNOB_MODE_WRITEONCE, "pintool",
+    "dl2-size","64", "dcache size in kilobytes");
 
 /* ===================================================================== */
 /* Print Help Message                                                    */
@@ -115,7 +117,7 @@ namespace ICACHE
 
 namespace DCACHE
 {
-    const UINT32 max_sets = KILO; // cacheSize / (lineSize * associativity);
+    const UINT32 max_sets = MEGA; // cacheSize / (lineSize * associativity);
     const UINT32 max_associativity = 256; // associativity;
     const CACHE_ALLOC::STORE_ALLOCATION allocation = CACHE_ALLOC::STORE_ALLOCATE;
 
@@ -143,13 +145,16 @@ typedef  COUNTER_ARRAY<UINT64, COUNTER_NUM> COUNTER_HIT_MISS;
 COMPRESSOR_COUNTER<ADDRINT, UINT32, COUNTER_HIT_MISS> dprofile;
 COMPRESSOR_COUNTER<ADDRINT, UINT32, COUNTER_HIT_MISS> iprofile;
 
+#define NOP ((VOID)0)
+
+/* ===================================================================== */
 /* I-cache access functions. */
 
 VOID InstLoadMulti(ADDRINT addr, UINT32 size, UINT32 instId) {
     // Access IL1.
-    const BOOL il1Hit = il1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD);
+    const BOOL il1Hit = il1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 
-    if (do_trace) {
+    if (doTrace) {
         const COUNTER counter = il1Hit ? COUNTER_HIT : COUNTER_MISS;
         ++iprofile[instId][counter];
     }
@@ -157,9 +162,9 @@ VOID InstLoadMulti(ADDRINT addr, UINT32 size, UINT32 instId) {
 
 VOID InstLoadSingle(ADDRINT addr, UINT32 instId) {
     // Access IL1.
-    const BOOL il1Hit = il1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD);
+    const BOOL il1Hit = il1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 
-    if (do_trace) {
+    if (doTrace) {
         const COUNTER counter = il1Hit ? COUNTER_HIT : COUNTER_MISS;
         ++iprofile[instId][counter];
     }
@@ -167,90 +172,109 @@ VOID InstLoadSingle(ADDRINT addr, UINT32 instId) {
 
 VOID InstLoadMultiFast(ADDRINT addr, UINT32 size) {
     // Access IL1.
-    il1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD);
+    il1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 }
 
 VOID InstLoadSingleFast(ADDRINT addr) {
     // Access IL1.
-    il1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD);
+    il1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 }
 
 /* ===================================================================== */
+/* D-cache access functions. */
 
 VOID LoadMulti(ADDRINT addr, UINT32 size, UINT32 instId) {
     // first level D-cache
-    const BOOL dl1Hit = dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD);
+    const BOOL dl1Hit = dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
+
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace) : NOP;
     
-    if (do_trace) {
+    if (doTrace) {
         const COUNTER counter = dl1Hit ? COUNTER_HIT : COUNTER_MISS;
         dprofile[instId][counter]++;
     }
 }
-
-/* ===================================================================== */
 
 VOID StoreMulti(ADDRINT addr, UINT32 size, UINT32 instId) {
     // first level D-cache
-    const BOOL dl1Hit = dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_STORE);
+    const BOOL dl1Hit = dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_STORE, doTrace);
 
-    if (do_trace) {
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->Access(addr, size, CACHE_BASE::ACCESS_TYPE_STORE, doTrace) : NOP;
+
+    if (doTrace) {
         const COUNTER counter = dl1Hit ? COUNTER_HIT : COUNTER_MISS;
         dprofile[instId][counter]++;
     }
 }
-
-/* ===================================================================== */
 
 VOID LoadSingle(ADDRINT addr, UINT32 instId) {
     // @todo we may access several cache lines for 
     // first level D-cache
-    const BOOL dl1Hit = dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD);
+    const BOOL dl1Hit = dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 
-    if (do_trace) {
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace) : NOP;
+
+    if (doTrace) {
         const COUNTER counter = dl1Hit ? COUNTER_HIT : COUNTER_MISS;
         dprofile[instId][counter]++;
     }
 }
-/* ===================================================================== */
 
 VOID StoreSingle(ADDRINT addr, UINT32 instId) {
     // @todo we may access several cache lines for 
     // first level D-cache
-    const BOOL dl1Hit = dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_STORE);
+    const BOOL dl1Hit = dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_STORE, doTrace);
 
-    if (do_trace) {
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_STORE, doTrace) : NOP;
+
+    if (doTrace) {
         const COUNTER counter = dl1Hit ? COUNTER_HIT : COUNTER_MISS;
         dprofile[instId][counter]++;
     }
 }
 
-/* ===================================================================== */
-
 VOID LoadMultiFast(ADDRINT addr, UINT32 size) {
-    dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD);
-}
+    const BOOL dl1Hit = dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 
-/* ===================================================================== */
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->Access(addr, size, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace) : NOP;
+}
 
 VOID StoreMultiFast(ADDRINT addr, UINT32 size) {
-    dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_STORE);
-}
+    const BOOL dl1Hit = dl1->Access(addr, size, CACHE_BASE::ACCESS_TYPE_STORE, doTrace);
 
-/* ===================================================================== */
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->Access(addr, size, CACHE_BASE::ACCESS_TYPE_STORE, doTrace) : NOP;
+}
 
 VOID LoadSingleFast(ADDRINT addr) {
-    dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD);    
-}
+    const BOOL dl1Hit = dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace);
 
-/* ===================================================================== */
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_LOAD, doTrace) : NOP;
+}
 
 VOID StoreSingleFast(ADDRINT addr) {
-    dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_STORE);    
+    const BOOL dl1Hit = dl1->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_STORE, doTrace);
+
+    // second elvel D-cache if there's any
+    dl2 && !dl1Hit ?
+        (VOID) dl2->AccessSingleLine(addr, CACHE_BASE::ACCESS_TYPE_STORE, doTrace) : NOP;
 }
 
-
-
 /* ===================================================================== */
+/* Instrumentation */
 
 VOID Instruction(INS ins, void * v) {
     // map sparse INS addresses to dense IDs
@@ -370,11 +394,11 @@ VOID Handler(EVENT_TYPE ev, VOID *v, CONTEXT *ctxt, VOID *ip, THREADID tid, BOOL
     switch(ev) {
         case EVENT_START:
 	    std::cout << "START TRACING" << std::endl;
-	    do_trace = true;
+	    doTrace = true;
 	    break;
 	case EVENT_STOP:
 	    std::cout << "STOP TRACING" << std::endl;
-	    do_trace = false;
+	    doTrace = false;
 	    break;
 	default:
 	    ASSERTX(false);
@@ -390,20 +414,20 @@ VOID Fini(int code, VOID * v) {
     std::ofstream outFile(KnobOutputFile.Value().c_str());
     
     outFile << "PIN:MEMLATENCIES 1.0. 0x0\n";
-            
+    outFile << "#\n"
+        "# ICACHE config\n"
+        "# ";
+    outFile << "size =  " << il1->CacheSize() / 1024 << "KB, "
+        << "line =  " << il1->LineSize() << "B, "
+        << "assoc = " << il1->Associativity() << std::endl;
+    outFile <<
+        "#\n"
+        "# IL1 stats\n"
+        "#\n";
+    outFile << il1->StatsLong("# ", CACHE_BASE::CACHE_TYPE_ICACHE);
+   
     if (KnobTrackInsts) {
-        outFile << "#\n"
-            "# ICACHE config\n"
-            "# ";
-        outFile << "size =  " << il1->CacheSize() / 1024 << "KB, "
-                << "line =  " << il1->LineSize() << "B, "
-                << "assoc = " << il1->Associativity() << std::endl;
-        outFile <<
-            "#\n"
-            "# IL1 stats\n"
-            "#\n";
-        outFile << il1->StatsLong("# ", CACHE_BASE::CACHE_TYPE_ICACHE);
-        outFile <<
+                outFile <<
             "#\n"
             "# LOAD stats\n"
             "#\n";
@@ -422,6 +446,21 @@ VOID Fini(int code, VOID * v) {
         "#\n";
     
     outFile << dl1->StatsLong("# ", CACHE_BASE::CACHE_TYPE_DCACHE);
+
+    if (KnobDL2Cache) {
+        outFile << "#\n"
+                "# DL2 config\n"
+                "# ";
+        outFile << "size =  " << dl2->CacheSize() / 1024 << "KB, "
+                    << "line =  " << dl2->LineSize() << "B, "
+                    << "assoc = " << dl2->Associativity() << std::endl;
+        outFile <<
+            "#\n"
+            "# DL2 stats\n"
+            "#\n";
+    
+        outFile << dl2->StatsLong("# ", CACHE_BASE::CACHE_TYPE_DCACHE);
+    }
 
     if( KnobTrackLoads || KnobTrackStores ) {
         outFile <<
@@ -445,7 +484,8 @@ int main(int argc, char *argv[]) {
 
     PIN_InitSymbols();
 
-    do_trace = false;
+    doTrace = false;
+
     icount.Activate();
     control.RegisterHandler(Handler, 0, FALSE);
     control.Activate();
@@ -459,7 +499,13 @@ int main(int argc, char *argv[]) {
                             KnobDL1CacheSize.Value() * KILO,
                             KnobLineSize.Value(),
                             KnobAssociativity.Value());
-    
+    if (KnobDL2Cache) {
+        dl2 = new DCACHE::DCACHE("L2 Data Cache",
+                                KnobDL2CacheSize.Value() * KILO,
+                                KnobLineSize.Value(),
+                                KnobAssociativity.Value());
+    }
+
     iprofile.SetKeyName("iaddr          ");
     iprofile.SetCounterName("icache:miss        icache:hit");
     dprofile.SetKeyName("iaddr          ");

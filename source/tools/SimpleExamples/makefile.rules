@@ -17,7 +17,7 @@
 # This defines tests which run tools of the same name.  This is simply for convenience to avoid
 # defining the test name twice (once in TOOL_ROOTS and again in TEST_ROOTS).
 # Tests defined here should not be defined in TOOL_ROOTS and TEST_ROOTS.
-TEST_TOOL_ROOTS := cache icache dcache edgcnt pinatrace trace icount inscount2_mt opcodemix malloctrace calltrace jumpmix toprtn \
+TEST_TOOL_ROOTS := cache edgcnt pinatrace trace icount inscount2_mt opcodemix malloctrace calltrace jumpmix toprtn \
                    catmix regmix ilenmix coco extmix get_source_location xed-print xed-use ldstmix topopcode regval \
                    oper-imm bsr_bsf
 
@@ -167,11 +167,11 @@ bsr_bsf.test: $(OBJDIR)bsr_bsf$(PINTOOL_SUFFIX) $(OBJDIR)bsr_bsf_app$(EXE_SUFFIX
 $(OBJDIR)cache$(PINTOOL_SUFFIX): $(OBJDIR)cache$(OBJ_SUFFIX) $(CONTROLLERLIB)
 	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE)$@ $^ $(TOOL_LPATHS) $(TOOL_LIBS)
 
-$(OBJDIR)icache$(PINTOOL_SUFFIX): $(OBJDIR)icache$(OBJ_SUFFIX) $(CONTROLLERLIB)
-	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE)$@ $^ $(TOOL_LPATHS) $(TOOL_LIBS)
+#$(OBJDIR)icache$(PINTOOL_SUFFIX): $(OBJDIR)icache$(OBJ_SUFFIX) $(CONTROLLERLIB)
+#	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE)$@ $^ $(TOOL_LPATHS) $(TOOL_LIBS)
 
-$(OBJDIR)dcache$(PINTOOL_SUFFIX): $(OBJDIR)dcache$(OBJ_SUFFIX) $(CONTROLLERLIB)
-	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE)$@ $^ $(TOOL_LPATHS) $(TOOL_LIBS)
+#$(OBJDIR)dcache$(PINTOOL_SUFFIX): $(OBJDIR)dcache$(OBJ_SUFFIX) $(CONTROLLERLIB)
+#	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE)$@ $^ $(TOOL_LPATHS) $(TOOL_LIBS)
 
 $(OBJDIR)opcodemix$(PINTOOL_SUFFIX): $(OBJDIR)opcodemix$(OBJ_SUFFIX) $(CONTROLLERLIB)
 	$(LINKER) $(TOOL_LDFLAGS) $(LINK_EXE)$@ $^ $(TOOL_LPATHS) $(TOOL_LIBS)
