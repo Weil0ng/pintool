@@ -133,8 +133,14 @@ class DIRECT_MAPPED
     VOID SetAssociativity(UINT32 associativity) { ASSERTX(associativity == 1); }
     UINT32 GetAssociativity(UINT32 associativity) { return 1; }
 
-    UINT32 Find(CACHE_TAG tag, UINT32 &wayIndex) { return(_tag == tag); }
-    VOID Replace(CACHE_TAG tag, UINT32 &wayIndex) { _tag = tag; }
+    UINT32 Find(CACHE_TAG tag, UINT32 &wayIndex) { 
+        wayIndex = 0;
+        return(_tag == tag);
+    }
+    VOID Replace(CACHE_TAG tag, UINT32 &wayIndex) {
+        wayIndex = 0;
+        _tag = tag;
+    }
 };
 
 /*!
@@ -179,7 +185,6 @@ class ROUND_ROBIN
             // tighter assembly loop for ARM that way ...
             if(_tags[index] == tag) {
                 wayIndex = index;
-                std::cout << wayIndex << std::endl;
                 goto end;
             }
         }
@@ -290,7 +295,7 @@ class CACHE_BASE
     VOID SplitAddress(const ADDRINT addr, CACHE_TAG & tag, UINT32 & setIndex, UINT32 & lineIndex) const
     {
         const UINT32 lineMask = _lineSize - 1;
-        lineIndex = addr & lineMask;
+        lineIndex = (addr & lineMask) / 8;
         SplitAddress(addr, tag, setIndex);
     }
 
@@ -444,7 +449,6 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr,
         allHit &= localHit;
 
         if (localHit) {
-            std::cout << wayIndex << std::endl;
             ASSERTX(wayIndex >= 0 && wayIndex < this->Associativity());
             ASSERTX(lineIndex >= 0 && lineIndex < this->LineSize()/SECTOR_LEN);
             // update sector util status.
