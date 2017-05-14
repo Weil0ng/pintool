@@ -49,6 +49,9 @@ END_LEGAL */
 #include "cache.H"
 #include "pin_profile.H"
 
+#define NOP ((VOID)0)
+#define WORD_LEN 4
+
 using namespace INSTLIB;
 using namespace CONTROLLER;
 
@@ -144,8 +147,6 @@ typedef  COUNTER_ARRAY<UINT64, COUNTER_NUM> COUNTER_HIT_MISS;
 // conceptually this is an array indexed by instruction address
 COMPRESSOR_COUNTER<ADDRINT, UINT32, COUNTER_HIT_MISS> dprofile;
 COMPRESSOR_COUNTER<ADDRINT, UINT32, COUNTER_HIT_MISS> iprofile;
-
-#define NOP ((VOID)0)
 
 /* ===================================================================== */
 /* I-cache access functions. */
@@ -281,7 +282,8 @@ VOID Instruction(INS ins, void * v) {
     const ADDRINT iaddr = INS_Address(ins);
     const UINT32 instId = iprofile.Map(iaddr);
     const UINT32 instSize = INS_Size(ins);
-    const BOOL   single = (instSize <= 4);
+    // We are assuming a word aligned memory layout for both inst and data.
+    const BOOL   single = (instSize <= WORD_LEN);
     
     // Do instruction cache access first.
     if (KnobTrackInsts) {
@@ -316,7 +318,7 @@ VOID Instruction(INS ins, void * v) {
         const ADDRINT iaddr = INS_Address(ins);
         const UINT32 instId = dprofile.Map(iaddr);
         const UINT32 size = INS_MemoryReadSize(ins);
-        const BOOL   single = (size <= 4);
+        const BOOL   single = (size <= WORD_LEN);
                 
         if( KnobTrackLoads ) {
             if( single ) {
@@ -355,7 +357,7 @@ VOID Instruction(INS ins, void * v) {
         const ADDRINT iaddr = INS_Address(ins);
         const UINT32 instId = dprofile.Map(iaddr);
         const UINT32 size = INS_MemoryWriteSize(ins);
-        const BOOL   single = (size <= 4);
+        const BOOL   single = (size <= WORD_LEN);
                 
         if( KnobTrackStores ) {
             if( single ) {

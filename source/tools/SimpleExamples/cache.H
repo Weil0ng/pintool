@@ -39,10 +39,12 @@ END_LEGAL */
 #define KILO 1024
 #define MEGA (KILO*KILO)
 #define GIGA (KILO*MEGA)
+#define SECTOR_LEN 8
 
 typedef UINT64 CACHE_STATS; // type of cache hit/miss counters
 
 #include <sstream>
+#include "pin_profile.H"
 
 /*! RMR (rodric@gmail.com) 
  *   - temporary work around because decstr()
@@ -131,8 +133,8 @@ class DIRECT_MAPPED
     VOID SetAssociativity(UINT32 associativity) { ASSERTX(associativity == 1); }
     UINT32 GetAssociativity(UINT32 associativity) { return 1; }
 
-    UINT32 Find(CACHE_TAG tag) { return(_tag == tag); }
-    VOID Replace(CACHE_TAG tag) { _tag = tag; }
+    UINT32 Find(CACHE_TAG tag, UINT32 &wayIndex) { return(_tag == tag); }
+    VOID Replace(CACHE_TAG tag, UINT32 &wayIndex) { _tag = tag; }
 };
 
 /*!
@@ -167,7 +169,7 @@ class ROUND_ROBIN
     }
     UINT32 GetAssociativity(UINT32 associativity) { return _tagsLastIndex + 1; }
     
-    UINT32 Find(CACHE_TAG tag)
+    UINT32 Find(CACHE_TAG tag, UINT32 &wayIndex)
     {
         bool result = true;
 
@@ -175,19 +177,25 @@ class ROUND_ROBIN
         {
             // this is an ugly micro-optimization, but it does cause a
             // tighter assembly loop for ARM that way ...
-            if(_tags[index] == tag) goto end;
+            if(_tags[index] == tag) {
+                wayIndex = index;
+                std::cout << wayIndex << std::endl;
+                goto end;
+            }
         }
         result = false;
 
         end: return result;
     }
 
-    VOID Replace(CACHE_TAG tag)
+    VOID Replace(CACHE_TAG tag, UINT32 &wayIndex)
     {
         // g++ -O3 too dumb to do CSE on following lines?!
         const UINT32 index = _nextReplaceIndex;
 
         _tags[index] = tag;
+        wayIndex = index;
+
         // condition typically faster than modulo
         _nextReplaceIndex = (index == 0 ? _tagsLastIndex : index - 1);
     }
@@ -228,6 +236,9 @@ class CACHE_BASE
   protected:
     static const UINT32 HIT_MISS_NUM = 2;
     CACHE_STATS _access[ACCESS_TYPE_NUM][HIT_MISS_NUM];
+    BOOL *_lineUtil = NULL;
+    COMPRESSOR_COUNTER<ADDRINT, UINT32, float> utilProfile;
+    COMPRESSOR_COUNTER<ADDRINT, UINT32, UINT32> evictCounter;
 
   private:    // input params
     const std::string _name;
@@ -303,6 +314,19 @@ CACHE_BASE::CACHE_BASE(std::string name, UINT32 cacheSize, UINT32 lineSize, UINT
         _access[accessType][false] = 0;
         _access[accessType][true] = 0;
     }
+
+    // Init cache line utilization status.
+    UINT32 numLines = cacheSize / lineSize;
+    UINT32 numSectors = lineSize / SECTOR_LEN;
+    _lineUtil = new BOOL[numLines * numSectors];
+    std::memset(_lineUtil, 0, numLines * numSectors * sizeof(BOOL));
+    // Init cache line utilization stats.
+    utilProfile.SetKeyName("addr            ");
+    utilProfile.SetCounterName("SectorUtilization");
+    utilProfile.SetThreshold(0);
+    evictCounter.SetKeyName("addr             ");
+    evictCounter.SetCounterName("Num_of_Eviction");
+    evictCounter.SetThreshold(0);
 }
 
 /*!
@@ -406,19 +430,52 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr,
     do
     {
         CACHE_TAG tag;
-        UINT32 setIndex;
+        UINT32 setIndex = -1;
+        UINT32 wayIndex = -1;
+        UINT32 lineIndex = -1;
+        UINT32 sectorOffset = -1;
+        UINT32 lineOffset = -1;
 
-        SplitAddress(addr, tag, setIndex);
+        SplitAddress(addr, tag, setIndex, lineIndex);
 
         SET & set = _sets[setIndex];
 
-        bool localHit = set.Find(tag);
+        bool localHit = set.Find(tag, wayIndex);
         allHit &= localHit;
 
+        if (localHit) {
+            std::cout << wayIndex << std::endl;
+            ASSERTX(wayIndex >= 0 && wayIndex < this->Associativity());
+            ASSERTX(lineIndex >= 0 && lineIndex < this->LineSize()/SECTOR_LEN);
+            // update sector util status.
+            sectorOffset = setIndex * this->Associativity() + wayIndex +lineIndex;
+            *(_lineUtil + sectorOffset) = true;
+        }
+
         // on miss, loads always allocate, stores optionally
-        if ( (! localHit) && (accessType == ACCESS_TYPE_LOAD || STORE_ALLOCATION == CACHE_ALLOC::STORE_ALLOCATE))
+        if ( (! localHit) &&
+                (accessType == ACCESS_TYPE_LOAD || STORE_ALLOCATION == CACHE_ALLOC::STORE_ALLOCATE))
         {
-            set.Replace(tag);
+            set.Replace(tag, wayIndex);
+            ASSERTX(wayIndex >= 0 && wayIndex < this->Associativity());
+            lineOffset = setIndex * this->Associativity() + wayIndex;
+            if (doTrace) {
+                // record sector util status.
+                UINT32 evictId = evictCounter.Map(tag);
+                UINT32 recordId = utilProfile.Map(tag);
+                UINT32 touched = 0;
+                for (UINT i = 0; i < this->LineSize()/SECTOR_LEN; i++) {
+                    if (*(_lineUtil + lineOffset + i))
+                        ++touched;
+                }
+                float totalUtil = evictCounter[evictId] * utilProfile[recordId] + touched;
+                ++evictCounter[evictId];
+                utilProfile[recordId] = totalUtil/evictCounter[evictId];
+            }
+            // reset sector util status.
+            std::memset(_lineUtil + lineOffset, 0, (this->LineSize()/SECTOR_LEN)*sizeof(BOOL));
+            sectorOffset = lineOffset + lineIndex;
+            *(_lineUtil + sectorOffset) = true;
         }
 
         addr = (addr & notLineMask) + lineSize; // start of next cache line
@@ -441,17 +498,19 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr,
 {
     CACHE_TAG tag;
     UINT32 setIndex;
+    UINT32 wayIndex;
+    UINT32 lineIndex;
 
-    SplitAddress(addr, tag, setIndex);
+    SplitAddress(addr, tag, setIndex, lineIndex);
 
     SET & set = _sets[setIndex];
 
-    bool hit = set.Find(tag);
+    bool hit = set.Find(tag, wayIndex);
 
     // on miss, loads always allocate, stores optionally
     if ( (! hit) && (accessType == ACCESS_TYPE_LOAD || STORE_ALLOCATION == CACHE_ALLOC::STORE_ALLOCATE))
     {
-        set.Replace(tag);
+        set.Replace(tag, wayIndex);
     }
 
     // Only update stats when tracking.
