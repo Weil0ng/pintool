@@ -501,9 +501,11 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr,
         ACCESS_TYPE accessType, BOOL doTrace)
 {
     CACHE_TAG tag;
-    UINT32 setIndex;
-    UINT32 wayIndex;
-    UINT32 lineIndex;
+    UINT32 setIndex = -1;
+    UINT32 wayIndex = -1;
+    UINT32 lineIndex = -1;
+    UINT32 sectorOffset = -1;
+    UINT32 lineOffset = -1;
 
     SplitAddress(addr, tag, setIndex, lineIndex);
 
@@ -511,10 +513,38 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr,
 
     bool hit = set.Find(tag, wayIndex);
 
+    if (hit) {
+        ASSERTX(wayIndex >= 0 && wayIndex < this->Associativity());
+        ASSERTX(lineIndex >= 0 && lineIndex < this->LineSize()/SECTOR_LEN);
+        // update sector util status.
+        sectorOffset = setIndex * this->Associativity() + wayIndex +lineIndex;
+        *(_lineUtil + sectorOffset) = true;
+    }
+
     // on miss, loads always allocate, stores optionally
     if ( (! hit) && (accessType == ACCESS_TYPE_LOAD || STORE_ALLOCATION == CACHE_ALLOC::STORE_ALLOCATE))
     {
         set.Replace(tag, wayIndex);
+        ASSERTX(wayIndex >= 0 && wayIndex < this->Associativity());
+        lineOffset = setIndex * this->Associativity() + wayIndex;
+        if (doTrace) {
+            // record sector util status.
+            UINT32 evictId = evictCounter.Map(tag);
+            UINT32 recordId = utilProfile.Map(tag);
+            UINT32 touched = 0;
+            for (UINT i = 0; i < this->LineSize()/SECTOR_LEN; i++) {
+                if (*(_lineUtil + lineOffset + i))
+                    ++touched;
+            }
+            float totalUtil = evictCounter[evictId] * utilProfile[recordId] + touched;
+            ++evictCounter[evictId];
+            utilProfile[recordId] = totalUtil/evictCounter[evictId];
+        }
+        // reset sector util status.
+        std::memset(_lineUtil + lineOffset, 0, (this->LineSize()/SECTOR_LEN)*sizeof(BOOL));
+        sectorOffset = lineOffset + lineIndex;
+        *(_lineUtil + sectorOffset) = true;
+
     }
 
     // Only update stats when tracking.
