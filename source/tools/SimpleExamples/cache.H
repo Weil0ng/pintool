@@ -239,11 +239,19 @@ class CACHE_BASE
     } CACHE_TYPE;
 
   protected:
+    typedef enum
+    {
+        COUNTER_TYPE_TOUCH = 0,
+        COUNTER_TYPE_EVICT = 1,
+        COUNTER_NUM
+    } COUNTER_TYPE;
+
+    typedef COUNTER_ARRAY<UINT64, COUNTER_NUM> COUNTERS;
+    BOOL *_lineUtil = NULL;
+    COMPRESSOR_COUNTER<ADDRINT, UINT32, COUNTERS> profile;
+
     static const UINT32 HIT_MISS_NUM = 2;
     CACHE_STATS _access[ACCESS_TYPE_NUM][HIT_MISS_NUM];
-    BOOL *_lineUtil = NULL;
-    COMPRESSOR_COUNTER<ADDRINT, UINT32, float> utilProfile;
-    COMPRESSOR_COUNTER<ADDRINT, UINT32, UINT32> evictCounter;
 
   private:    // input params
     const std::string _name;
@@ -295,11 +303,11 @@ class CACHE_BASE
     VOID SplitAddress(const ADDRINT addr, CACHE_TAG & tag, UINT32 & setIndex, UINT32 & lineIndex) const
     {
         const UINT32 lineMask = _lineSize - 1;
-        lineIndex = (addr & lineMask) / 8;
+        lineIndex = (addr & lineMask) / SECTOR_LEN;
         SplitAddress(addr, tag, setIndex);
     }
 
-    string StatsLong(string prefix = "", CACHE_TYPE = CACHE_TYPE_DCACHE) const;
+    string StatsLong(string prefix = "", CACHE_TYPE = CACHE_TYPE_DCACHE);
 };
 
 CACHE_BASE::CACHE_BASE(std::string name, UINT32 cacheSize, UINT32 lineSize, UINT32 associativity)
@@ -326,19 +334,19 @@ CACHE_BASE::CACHE_BASE(std::string name, UINT32 cacheSize, UINT32 lineSize, UINT
     _lineUtil = new BOOL[numLines * numSectors];
     std::memset(_lineUtil, 0, numLines * numSectors * sizeof(BOOL));
     // Init cache line utilization stats.
-    utilProfile.SetKeyName("addr            ");
-    utilProfile.SetCounterName("SectorUtilization");
-    utilProfile.SetThreshold(0);
-    evictCounter.SetKeyName("addr             ");
-    evictCounter.SetCounterName("Num_of_Eviction");
-    evictCounter.SetThreshold(0);
+    profile.SetKeyName("addr            ");
+    profile.SetCounterName("Touched_Sectors       Eviction_Times");
+    COUNTERS threshold;
+    threshold[COUNTER_TYPE_TOUCH] = 0;
+    threshold[COUNTER_TYPE_EVICT] = 0;
+    profile.SetThreshold(threshold);
 }
 
 /*!
  *  @brief Stats output method
  */
 
-string CACHE_BASE::StatsLong(string prefix, CACHE_TYPE cache_type) const
+string CACHE_BASE::StatsLong(string prefix, CACHE_TYPE cache_type)
 {
     const UINT32 headerWidth = 19;
     const UINT32 numberWidth = 12;
@@ -383,6 +391,19 @@ string CACHE_BASE::StatsLong(string prefix, CACHE_TYPE cache_type) const
            "  " +fltstr(100.0 * Accesses() / Accesses(), 2, 6) + "%\n";
     out += "\n";
 
+    out += "# Cacheline Utilization Stats:\n";
+    UINT32 numSectors = this->_lineSize / SECTOR_LEN; 
+    UINT64 totalTouched = 0;
+    UINT64 totalSectors = 0;
+    const UINT32 numCounters = profile.Map(UINT64(0));
+    for (UINT32 i=0; i<numCounters; i++) {
+        COUNTERS counter = profile[i];
+        totalTouched += counter[COUNTER_TYPE_TOUCH];
+        totalSectors += counter[COUNTER_TYPE_EVICT] * numSectors;
+    }
+    out += "# Avg. util: " + fltstr((100.0 * totalTouched) / totalSectors, 2 ,6) + "%\n";
+    // Prints cache line utilization per addr.
+    // out += profile.StringLong();
     return out;
 }
 
@@ -435,11 +456,11 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr,
     do
     {
         CACHE_TAG tag;
-        UINT32 setIndex = -1;
-        UINT32 wayIndex = -1;
-        UINT32 lineIndex = -1;
-        UINT32 sectorOffset = -1;
-        UINT32 lineOffset = -1;
+        UINT32 setIndex = -1; // set index in cache
+        UINT32 wayIndex = -1; // way index in cache
+        UINT32 lineIndex = -1; // line index in cache
+        UINT32 sectorOffset = -1; // sector offset in profile array
+        UINT32 lineOffset = -1; // cache line offset in profile array
 
         SplitAddress(addr, tag, setIndex, lineIndex);
 
@@ -465,16 +486,14 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::Access(ADDRINT addr,
             lineOffset = setIndex * this->Associativity() + wayIndex;
             if (doTrace) {
                 // record sector util status.
-                UINT32 evictId = evictCounter.Map(tag);
-                UINT32 recordId = utilProfile.Map(tag);
+                const UINT32 recordId = profile.Map(tag);
                 UINT32 touched = 0;
                 for (UINT i = 0; i < this->LineSize()/SECTOR_LEN; i++) {
                     if (*(_lineUtil + lineOffset + i))
                         ++touched;
                 }
-                float totalUtil = evictCounter[evictId] * utilProfile[recordId] + touched;
-                ++evictCounter[evictId];
-                utilProfile[recordId] = totalUtil/evictCounter[evictId];
+                profile[recordId][COUNTER_TYPE_TOUCH] += touched;
+                ++profile[recordId][COUNTER_TYPE_EVICT];
             }
             // reset sector util status.
             std::memset(_lineUtil + lineOffset, 0, (this->LineSize()/SECTOR_LEN)*sizeof(BOOL));
@@ -529,16 +548,14 @@ bool CACHE<SET,MAX_SETS,STORE_ALLOCATION>::AccessSingleLine(ADDRINT addr,
         lineOffset = setIndex * this->Associativity() + wayIndex;
         if (doTrace) {
             // record sector util status.
-            UINT32 evictId = evictCounter.Map(tag);
-            UINT32 recordId = utilProfile.Map(tag);
+            const UINT32 recordId = profile.Map(tag);
             UINT32 touched = 0;
             for (UINT i = 0; i < this->LineSize()/SECTOR_LEN; i++) {
                 if (*(_lineUtil + lineOffset + i))
                     ++touched;
             }
-            float totalUtil = evictCounter[evictId] * utilProfile[recordId] + touched;
-            ++evictCounter[evictId];
-            utilProfile[recordId] = totalUtil/evictCounter[evictId];
+            profile[recordId][COUNTER_TYPE_TOUCH] += touched;
+            ++profile[recordId][COUNTER_TYPE_EVICT];
         }
         // reset sector util status.
         std::memset(_lineUtil + lineOffset, 0, (this->LineSize()/SECTOR_LEN)*sizeof(BOOL));
