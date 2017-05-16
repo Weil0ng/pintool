@@ -2,4 +2,4 @@
 *.out
 *.log
 *.swp
-./source/tools/**/*.so
+source/tools/**/*.so
