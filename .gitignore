@@ -2,4 +2,3 @@
 *.out
 *.log
 *.swp
-**/source/tools/**/*.so
